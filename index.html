@@ -433,12 +433,7 @@
 <div class="overlay" id="overlay">
   <div class="spinner-box">
     <div class="spinner"></div>
-    <p id="overlay-msg">Menyimpan data…</p>
-    <div id="overlay-steps" style="margin-top:12px;font-size:12px;color:#b8963e;text-align:left;line-height:2">
-      <div id="step1">⏳ Menyimpan data ke server…</div>
-      <div id="step2" style="opacity:0.3">⏳ Membuat file PDF…</div>
-      <div id="step3" style="opacity:0.3">⏳ Menyiapkan WhatsApp…</div>
-    </div>
+    <p>Menyimpan data…</p>
   </div>
 </div>
 
@@ -849,48 +844,44 @@
   let _lastData = null;
 
   // ── Buka WhatsApp langsung (dipanggil dalam konteks klik agar tidak diblokir browser) ──
-  // ── Buka WhatsApp dengan data + link PDF ──
-  function bukaWA(data, driveLink) {
-    const tgl = new Date().toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
-    const linkBaris = driveLink
-      ? '📎 *File PDF:* ' + driveLink + '\n'
-      : '📎 _PDF tidak tersedia_\n';
 
-    const msg = encodeURIComponent(
-      '🏠 *DATA PENGHUNI BARU*\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '👤 *Nama:* ' + data.nama + '\n' +
-      '🪪 *NIK:* ' + data.ktp + '\n' +
-      '📞 *Telepon:* ' + data.telepon + '\n' +
-      '📅 *TTL:* ' + data.tempat_lahir + ', ' + fmtDate(data.tgl_lahir) + '\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '🆘 *Kontak Darurat:*\n' +
-      '   ' + data.cp_nama + ' (' + data.cp_hubungan + ')\n' +
-      '   📞 ' + data.cp_hp + '\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '📆 _Dikirim: ' + tgl + '_\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      linkBaris +
-      '_Data lengkap tersimpan di Google Sheets._'
+  // ── Buat pesan WA — tanpa emoji, format monospace rapi ──
+  function buildWAMsg(data, driveLink) {
+    const tgl = new Date().toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
+    // pad: rata kiri kolom label supaya nilai sejajar
+    function pad(str, len) { return (str + ':').padEnd(len, ' '); }
+    const L = 14; // lebar kolom label
+
+    const linkBaris = driveLink
+      ? pad('File PDF', L) + driveLink
+      : pad('File PDF', L) + '_(sedang diproses)_';
+
+    return (
+      '*[ DATA PENGHUNI BARU ]*\n' +
+      '```\n' +
+      pad('Nama', L)      + (data.nama || '-') + '\n' +
+      pad('NIK', L)       + (data.ktp  || '-') + '\n' +
+      pad('Telepon', L)   + (data.telepon || '-') + '\n' +
+      pad('Tempat Lahir', L) + (data.tempat_lahir || '-') + '\n' +
+      pad('Tgl Lahir', L) + fmtDate(data.tgl_lahir) + '\n' +
+      '```\n' +
+      '*[ KONTAK DARURAT ]*\n' +
+      '```\n' +
+      pad('Nama', L)      + (data.cp_nama || '-') + '\n' +
+      pad('Hubungan', L)  + (data.cp_hubungan || '-') + '\n' +
+      pad('No. HP', L)    + (data.cp_hp || '-') + '\n' +
+      '```\n' +
+      linkBaris + '\n' +
+      '_Dikirim: ' + tgl + ' | Data tersimpan di Google Sheets_'
     );
+  }
+
+  function bukaWA(data, driveLink) {
+    const msg = encodeURIComponent(buildWAMsg(data, driveLink));
     window.open('https://wa.me/' + WA_NUMBER + '?text=' + msg, '_blank');
   }
 
-  // ── Helper update step di overlay ──
-  function setStep(n, msg) {
-    g('overlay-msg').textContent = msg;
-    ['step1','step2','step3'].forEach((id, i) => {
-      const el = g(id);
-      if (i < n - 1) {
-        el.textContent = el.textContent.replace('⏳','✅');
-        el.style.opacity = '1';
-      } else if (i === n - 1) {
-        el.style.opacity = '1';
-      }
-    });
-  }
-
-  // ── Submit form — tunggu PDF siap, baru buka WA ──
+  // ── Submit form — validasi → buka WA langsung → kirim data ke GAS ──
   async function submitForm() {
     if (!validate()) {
       const agree = document.getElementById('agree').checked;
@@ -906,50 +897,48 @@
     const data = getData();
     _lastData  = data;
 
-    // Tampilkan overlay loading
+    // ── Buka WA SEKARANG (masih dalam konteks klik — tidak diblokir browser) ──
+    bukaWA(data, '');
+
+    // ── Tampilkan overlay & kirim data ke GAS di background ──
     g('overlay').classList.add('show');
-    setStep(1, 'Menyimpan data…');
+    g('overlay').querySelector('p').textContent = 'Menyimpan data…';
 
     const formData = new URLSearchParams();
     Object.keys(data).forEach(key => formData.append(key, data[key]));
-    formData.append('token', SECRET);
 
     try {
-      // Step 1: kirim data ke GAS — GAS generate PDF & simpan ke Drive
-      setStep(1, 'Menyimpan data ke server…');
-      const res  = await fetch(SCRIPT_URL, { method: 'POST', body: formData });
-      const json = await res.json().catch(() => ({}));
-
-      // Step 2: PDF selesai di-generate (sudah ada driveLink dari response)
-      setStep(2, 'PDF berhasil dibuat…');
-      await new Promise(r => setTimeout(r, 600)); // jeda visual sebentar
-
-      // Step 3: buka WhatsApp
-      setStep(3, 'Membuka WhatsApp…');
-      await new Promise(r => setTimeout(r, 800));
-
-      const driveLink = json.driveLink || '';
-      _driveLink = driveLink;
-
-      // Sembunyikan overlay SEBELUM buka WA (popup blocker lebih lunak setelah await)
+      await fetch(SCRIPT_URL, { method: 'POST', body: formData, mode: 'no-cors' });
       g('overlay').classList.remove('show');
-
-      // Buka WA dengan link PDF yang sudah siap
-      bukaWA(data, driveLink);
-
-      // Tampilkan halaman sukses
       showSuccess(data);
-      toast(driveLink ? '✅ Data & PDF terkirim ke owner!' : '✅ Data terkirim!');
+      toast('Data berhasil dikirim ✓ PDF sedang diproses…');
+
+      // Polling link Drive — setelah siap, kirim notif WA kedua dengan link PDF
+      fetchDriveLinkAndNotify(data);
 
     } catch (err) {
       g('overlay').classList.remove('show');
-      toast('Gagal mengirim data! Cek koneksi internet.');
+      toast('Gagal mengirim data ke server! Cek koneksi.');
       console.error(err);
     }
   }
 
-  // Tidak lagi digunakan
-  async function fetchDriveLinkAndNotify(data) {}
+  // ── Polling link Drive, lalu buka WA kedua dengan link PDF ──
+  async function fetchDriveLinkAndNotify(data) {
+    await new Promise(r => setTimeout(r, 8000)); // tunggu GAS generate PDF
+    try {
+      const url  = SCRIPT_URL + '?action=getlink&ktp=' + encodeURIComponent(data.ktp);
+      const res  = await fetch(url);
+      const json = await res.json();
+      if (json.driveLink) {
+        _driveLink = json.driveLink;
+        // Tampilkan toast + tombol untuk buka WA lagi dengan link PDF
+        toast('✅ PDF siap! Ketuk tombol WhatsApp untuk kirim link ke owner.');
+      }
+    } catch(e) {
+      console.warn('Gagal fetch drive link:', e);
+    }
+  }
 
   function showSuccess(data) {
     g('s-nama').textContent = data.nama;
@@ -961,32 +950,9 @@
   // ── Tombol "Kirim PDF ke WhatsApp Owner" ──
   function shareWA() {
     const data = _lastData || getData();
-    const tgl  = new Date().toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
-
-    const linkBaris = _driveLink
-      ? '📎 *File PDF:* ' + _driveLink + '\n'
-      : '📎 _PDF masih diproses, coba beberapa saat lagi_\n';
-
-    const msg = encodeURIComponent(
-      '🏠 *DATA PENGHUNI BARU*\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '👤 *Nama:* ' + data.nama + '\n' +
-      '🪪 *NIK:* ' + data.ktp + '\n' +
-      '📞 *Telepon:* ' + data.telepon + '\n' +
-      '📅 *TTL:* ' + data.tempat_lahir + ', ' + fmtDate(data.tgl_lahir) + '\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '🆘 *Kontak Darurat:*\n' +
-      '   ' + data.cp_nama + ' (' + data.cp_hubungan + ')\n' +
-      '   📞 ' + data.cp_hp + '\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '📆 _Dikirim: ' + tgl + '_\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      linkBaris +
-      '_Data lengkap tersimpan di Google Sheets._'
-    );
-
+    const msg  = encodeURIComponent(buildWAMsg(data, _driveLink || ''));
     window.open('https://wa.me/' + WA_NUMBER + '?text=' + msg, '_blank');
-    toast(_driveLink ? '✅ WhatsApp terbuka dengan link PDF!' : '⚠️ WhatsApp terbuka — PDF masih diproses, tunggu notif lalu kirim ulang.');
+    toast(_driveLink ? 'WhatsApp terbuka dengan link PDF!' : 'WhatsApp terbuka!');
   }
 
   function resetForm() {
