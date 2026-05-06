@@ -895,15 +895,24 @@
 
     const formData = new URLSearchParams();
     Object.keys(data).forEach(key => formData.append(key, data[key]));
+    formData.append('token', SECRET); // kirim token agar GAS tidak reject
 
     try {
-      await fetch(SCRIPT_URL, { method: 'POST', body: formData, mode: 'no-cors' });
+      // Tanpa no-cors agar bisa baca response (driveLink) dari GAS
+      const res  = await fetch(SCRIPT_URL, { method: 'POST', body: formData });
+      const json = await res.json().catch(() => ({}));
+
       g('overlay').classList.remove('show');
       showSuccess(data);
-      toast('Data berhasil dikirim ✓ PDF sedang diproses…');
 
-      // Polling link Drive — setelah siap, kirim notif WA kedua dengan link PDF
-      fetchDriveLinkAndNotify(data);
+      if (json.driveLink) {
+        _driveLink = json.driveLink;
+        toast('✅ Data & PDF tersimpan! Ketuk tombol WA untuk kirim link ke owner.');
+      } else if (json.error) {
+        toast('⚠️ Server error: ' + json.error);
+      } else {
+        toast('Data berhasil dikirim ✓');
+      }
 
     } catch (err) {
       g('overlay').classList.remove('show');
@@ -912,21 +921,9 @@
     }
   }
 
-  // ── Polling link Drive, lalu buka WA kedua dengan link PDF ──
+  // ── Fungsi ini tidak lagi dipakai (response langsung dari GAS) ──
   async function fetchDriveLinkAndNotify(data) {
-    await new Promise(r => setTimeout(r, 8000)); // tunggu GAS generate PDF
-    try {
-      const url  = SCRIPT_URL + '?action=getlink&ktp=' + encodeURIComponent(data.ktp);
-      const res  = await fetch(url);
-      const json = await res.json();
-      if (json.driveLink) {
-        _driveLink = json.driveLink;
-        // Tampilkan toast + tombol untuk buka WA lagi dengan link PDF
-        toast('✅ PDF siap! Ketuk tombol WhatsApp untuk kirim link ke owner.');
-      }
-    } catch(e) {
-      console.warn('Gagal fetch drive link:', e);
-    }
+    // deprecated — driveLink sudah didapat langsung dari response doPost
   }
 
   function showSuccess(data) {
