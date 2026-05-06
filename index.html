@@ -1,990 +1,258 @@
-<!DOCTYPE html>
-<html lang="id">
+// ============================================================
+// KONFIGURASI
+// ============================================================
+const SPREADSHEET_ID    = "1eA5zMV9I5xEZOAOikGETrwSRwmCI9oExbXhSVUjPn18";
+const DRIVE_FOLDER_NAME = "FormulirPenghuni";
+const WA_OWNER_NUMBER   = "6281382461482";
+const SECRET            = "kostpakagus";
+
+// ============================================================
+// doPost
+// ============================================================
+function doPost(e) {
+  try {
+    if (e.parameter.token !== SECRET) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ error: "Unauthorized" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const p = e.parameter || {};
+
+    const sheet = SpreadsheetApp
+      .openById(SPREADSHEET_ID)
+      .getActiveSheet();
+
+    sheet.appendRow([
+      new Date(),
+      p.nama         || '',
+      p.ktp          || '',
+      p.telepon      || '',
+      p.tempat_lahir || '',
+      p.tgl_lahir    || '',
+      p.cp_nama      || '',
+      p.cp_hubungan  || '',
+      p.cp_hp        || '',
+      p.setuju       || ''
+    ]);
+
+    const lastRow = sheet.getLastRow();
+    const row     = sheet.getRange(lastRow, 1, 1, 10).getValues()[0];
+    const data = {
+      nama:         String(row[1] || ''),
+      ktp:          String(row[2] || ''),
+      telepon:      String(row[3] || ''),
+      tempat_lahir: String(row[4] || ''),
+      tgl_lahir: (function() {
+        if (!row[5]) return '';
+        try {
+          const d = (row[5] instanceof Date) ? row[5] : new Date(row[5]);
+          if (isNaN(d.getTime())) return String(row[5]);
+          return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        } catch(ex) { return String(row[5] || ''); }
+      })(),
+      cp_nama:     String(row[6] || ''),
+      cp_hubungan: String(row[7] || ''),
+      cp_hp:       String(row[8] || ''),
+      setuju:      String(row[9] || '')
+    };
+
+    const driveLink = generateAndSavePdf(data);
+    sheet.getRange(lastRow, 11).setValue(driveLink);
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: "success", driveLink: driveLink }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: "error", message: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ============================================================
+// generateAndSavePdf — INI YANG TADINYA KOSONG, SEKARANG DIISI
+// ============================================================
+function generateAndSavePdf(data) {
+  const tgl     = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd MMMM yyyy HH:mm');
+  const tglFile = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss');
+
+  const bulan = ['Januari','Februari','Maret','April','Mei','Juni',
+                 'Juli','Agustus','September','Oktober','November','Desember'];
+  let tglLahir = '—';
+  try {
+    const raw = data.tgl_lahir;
+    if (raw) {
+      let d;
+      if (raw instanceof Date) {
+        d = raw;
+      } else if (typeof raw === 'string' && raw.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        const parts = raw.split('-');
+        d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+      } else {
+        d = new Date(raw);
+      }
+      if (!isNaN(d.getTime())) {
+        tglLahir = d.getDate() + ' ' + bulan[d.getMonth()] + ' ' + d.getFullYear();
+      }
+    }
+  } catch(e) { tglLahir = String(data.tgl_lahir || '—'); }
+
+  const html = `<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
-  <title>Data Penghuni Kost</title>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --ink:      #1c1c1e;
-      --navy:     #0f2542;
-      --gold:     #b8963e;
-      --gold-lt:  #d4b06a;
-      --cream:    #f5f5f5;
-      --paper:    #ffffff;
-      --line:     #e0e0e0;
-      --muted:    #7a756e;
-      --red:      #c0392b;
-      --appbar-h: 56px;
-    }
-
-    html { scroll-behavior: smooth; }
-
-    body {
-      font-family: 'DM Sans', sans-serif;
-      background: #fff;
-      color: var(--ink);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* ── APP BAR — tipis seperti screenshot ── */
-    .app-bar {
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      height: 48px;
-      background: var(--navy);
-      display: flex;
-      align-items: center;
-      padding: 0 16px;
-      gap: 10px;
-    }
-    .app-bar-icon {
-      width: 28px; height: 28px;
-      border-radius: 6px;
-      background: rgba(184,150,62,0.18);
-      border: 1px solid rgba(184,150,62,0.3);
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-    }
-    .app-bar-icon svg { width: 15px; height: 15px; fill: var(--gold); }
-    .app-bar-titles { flex: 1; min-width: 0; }
-    .app-bar-titles .title {
-      font-size: 0.88rem;
-      font-weight: 600;
-      color: #fff;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    /* no subtitle, no badge — bersih seperti screenshot */
-    .app-bar-badge { display: none; }
-    .app-bar-titles .subtitle { display: none; }
-
-    /* ── PAGE CONTENT ── */
-    .page-content {
-      flex: 1;
-      padding: 0 0 80px;
-      max-width: 600px;
-      width: 100%;
-      margin: 0 auto;
-    }
-
-    /* Section label — persis seperti screenshot (gold uppercase, garis samping) */
-    .section-label {
-      font-size: 0.68rem;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--gold);
-      padding: 14px 16px 8px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .section-label::after {
-      content: '';
-      flex: 1;
-      height: 1px;
-      background: var(--line);
-    }
-
-    /* ── CARD — flat, no shadow, no border-radius besar ── */
-    .card {
-      background: #fff;
-      padding: 4px 16px 8px;
-      margin-bottom: 0;
-    }
-
-    /* ── FIELD ── */
-    .field { margin-bottom: 14px; }
-    .field:last-child { margin-bottom: 4px; }
-
-    .field label {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      font-size: 0.7rem;
-      font-weight: 600;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-      color: var(--navy);
-      margin-bottom: 6px;
-    }
-    .field label .ico {
-      width: 20px; height: 20px;
-      background: var(--navy);
-      border-radius: 5px;
-      display: inline-flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-    }
-    .field label .ico svg { width: 11px; height: 11px; fill: var(--gold); }
-    .field label .req { color: var(--gold); margin-left: 1px; }
-
-    .field input {
-      width: 100%;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 16px;
-      color: var(--ink);
-      background: #fff;
-      border: 1.5px solid var(--line);
-      border-radius: 10px;
-      padding: 14px 16px;
-      outline: none;
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
-    .field input + input { margin-top: 8px; }
-    .field input:focus {
-      border-color: var(--gold);
-      box-shadow: 0 0 0 3px rgba(184,150,62,0.10);
-    }
-    .field input.err { border-color: var(--red); }
-
-    .err-msg { display: none; font-size: 0.72rem; color: var(--red); margin-top: 4px; font-weight: 500; }
-    .field.has-err .err-msg { display: block; }
-
-    .cp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
-    @media (max-width: 360px) { .cp-grid { grid-template-columns: 1fr; } }
-
-    /* CSS DOPDOWN   */
-    .field select {
-  width: 100%;
-  font-family: 'DM Sans', sans-serif;
-  font-size: 16px;
-  color: var(--ink);
-  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24'%3E%3Cpath fill='%23b8963e' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E") no-repeat right 14px center;
-  border: 1.5px solid var(--line);
-  border-radius: 10px;
-  padding: 14px 40px 14px 16px;
-  outline: none;
-  appearance: none;
-  -webkit-appearance: none;
-  cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-.field select:focus {
-  border-color: var(--gold);
-  box-shadow: 0 0 0 3px rgba(184,150,62,0.10);
-}
-.field select.err {
-  border-color: var(--red);
-}
-
-    /* ── TERMS BOX ── */
-    .terms-box {
-      background: var(--paper);
-      border: 1.5px solid var(--line);
-      border-radius: 16px;
-      padding: 16px 16px 14px;
-      margin-bottom: 12px;
-    }
-    .terms-box h3 {
-      font-size: 0.88rem;
-      font-weight: 600;
-      color: var(--navy);
-      margin-bottom: 10px;
-      display: flex;
-      align-items: center;
-      gap: 7px;
-    }
-    .terms-box h3::before {
-      content: '';
-      width: 3px; height: 16px;
-      background: var(--gold);
-      border-radius: 2px;
-      display: inline-block;
-    }
-    .terms-box ol {
-      padding-left: 18px;
-      margin-bottom: 12px;
-      font-size: 0.8rem;
-      line-height: 1.65;
-      color: #444;
-    }
-    .terms-box ol li { margin-bottom: 4px; }
-    .terms-footer {
-      font-style: italic;
-      font-size: 0.77rem;
-      margin-bottom: 12px;
-      color: var(--muted);
-    }
-    .agree {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 0.83rem;
-      font-weight: 500;
-      color: var(--navy);
-      cursor: pointer;
-      padding: 10px 12px;
-      background: rgba(15,37,66,0.04);
-      border-radius: 10px;
-    }
-    .agree input[type="checkbox"] {
-      width: 18px; height: 18px;
-      accent-color: var(--navy);
-      flex-shrink: 0;
-      cursor: pointer;
-    }
-
-    @keyframes shake {
-      0%, 100% { transform: translateX(0); }
-      20%, 60% { transform: translateX(-5px); }
-      40%, 80% { transform: translateX(5px); }
-    }
-    .terms-box.err {
-      border-color: var(--red);
-      box-shadow: 0 0 0 3px rgba(192,57,43,0.08);
-      animation: shake 0.4s ease;
-    }
-
-    /* ── AUTO INFO ── */
-    .auto-info {
-      background: rgba(15,37,66,0.05);
-      border-left: 3px solid var(--gold);
-      border-radius: 0 10px 10px 0;
-      padding: 10px 14px;
-      font-size: 0.78rem;
-      color: var(--muted);
-      margin-bottom: 12px;
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-    .auto-info p { line-height: 1.5; }
-    .auto-info strong { color: var(--navy); }
-
-    /* ── SUBMIT BUTTON ── */
-    .btn-submit {
-      width: 100%;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 0.95rem;
-      font-weight: 600;
-      letter-spacing: 0.03em;
-      background: var(--navy);
-      color: #fff;
-      border: none;
-      border-radius: 14px;
-      padding: 15px;
-      cursor: pointer;
-      transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      margin-bottom: 12px;
-    }
-    .btn-submit svg { width: 18px; height: 18px; fill: var(--gold); }
-    .btn-submit:hover { background: #162f54; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(15,37,66,0.28); }
-    .btn-submit:active { transform: translateY(0); }
-
-    /* ── SUCCESS VIEW ── */
-    .success-view { display: none; text-align: center; padding: 24px 0 8px; animation: riseIn 0.5s ease both; }
-    .success-view.show { display: block; }
-    .form-fields.hide { display: none; }
-
-    @keyframes riseIn {
-      from { opacity: 0; transform: translateY(20px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-
-    .check-circle {
-      width: 68px; height: 68px;
-      background: var(--navy);
-      border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      margin: 0 auto 18px;
-      box-shadow: 0 8px 28px rgba(15,37,66,0.25);
-    }
-    .check-circle svg { width: 30px; height: 30px; fill: var(--gold); }
-    .success-view h2 { font-family: 'DM Serif Display', serif; font-size: 1.5rem; color: var(--navy); margin-bottom: 8px; }
-    .success-view p { font-size: 0.85rem; color: var(--muted); margin-bottom: 24px; line-height: 1.6; }
-
-    .action-row { display: flex; flex-direction: column; gap: 10px; }
-    .btn-action {
-      font-family: 'DM Sans', sans-serif;
-      font-size: 0.88rem; font-weight: 600;
-      border: none; border-radius: 12px;
-      padding: 13px 18px; cursor: pointer;
-      display: flex; align-items: center; justify-content: center; gap: 9px;
-      transition: all 0.18s;
-    }
-    .btn-action svg { width: 17px; height: 17px; }
-    .btn-pdf { background: var(--navy); color: #fff; }
-    .btn-pdf svg { fill: var(--gold); }
-    .btn-pdf:hover { background: #162f54; transform: translateY(-1px); }
-    .btn-wa { background: #25D366; color: #fff; }
-    .btn-wa svg { fill: #fff; }
-    .btn-wa:hover { background: #1fc75e; transform: translateY(-1px); }
-    .btn-reset { background: transparent; color: var(--muted); border: 1.5px solid var(--line); }
-    .btn-reset svg { fill: var(--muted); }
-    .btn-reset:hover { border-color: var(--navy); color: var(--navy); }
-
-    /* ── OVERLAY ── */
-    .overlay { display: none; position: fixed; inset: 0; background: rgba(15,37,66,0.5); z-index: 100; align-items: center; justify-content: center; }
-    .overlay.show { display: flex; }
-    .spinner-box { background: #fff; border-radius: 14px; padding: 28px 40px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
-    .spinner { width: 34px; height: 34px; border: 3px solid #eee; border-top-color: var(--gold); border-radius: 50%; animation: spin 0.75s linear infinite; margin: 0 auto 12px; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spinner-box p { font-size: 0.85rem; color: var(--navy); font-weight: 500; }
-
-    /* ── TOAST ── */
-    .toast {
-      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(80px);
-      background: #1c1c1e; color: #fff;
-      padding: 11px 18px; border-radius: 24px;
-      font-size: 0.82rem; font-weight: 500;
-      display: flex; align-items: center; gap: 8px;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.28);
-      opacity: 0; transition: all 0.3s cubic-bezier(.22,.68,0,1.2);
-      z-index: 200; max-width: calc(100% - 32px);
-      white-space: nowrap;
-    }
-    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
-    .toast svg { width: 15px; height: 15px; fill: var(--gold); flex-shrink: 0; }
-
-    /* ── MODAL ── */
-    .modal {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.55);
-      display: none; align-items: flex-end; justify-content: center;
-      z-index: 999;
-    }
-    .modal.show { display: flex; }
-    .modal-box {
-      width: 100%; max-width: 560px;
-      background: #fff;
-      border-radius: 24px 24px 0 0;
-      padding: 0 0 32px;
-      animation: slideUp 0.35s cubic-bezier(.22,.68,0,1.1) both;
-      max-height: 85vh;
-      display: flex; flex-direction: column;
-    }
-    @keyframes slideUp {
-      from { transform: translateY(100%); opacity: 0; }
-      to   { transform: translateY(0); opacity: 1; }
-    }
-    .modal-handle {
-      width: 36px; height: 4px;
-      background: #ddd; border-radius: 2px;
-      margin: 12px auto 0;
-      flex-shrink: 0;
-    }
-    .modal-header {
-      padding: 16px 20px 12px;
-      display: flex; align-items: center; gap: 10px;
-      border-bottom: 1px solid var(--line);
-      flex-shrink: 0;
-    }
-    .modal-header .icon {
-      width: 36px; height: 36px;
-      background: var(--navy);
-      border-radius: 10px;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .modal-header .icon svg { width: 18px; height: 18px; fill: var(--gold); }
-    .modal-header h3 { font-size: 0.95rem; font-weight: 600; color: var(--navy); }
-    .modal-header p { font-size: 0.72rem; color: var(--muted); }
-    .modal-content {
-      flex: 1; overflow-y: auto;
-      padding: 16px 20px;
-      font-size: 0.8rem;
-      line-height: 1.65;
-      color: #444;
-    }
-    .modal-content ol { padding-left: 18px; }
-    .modal-content ol li { margin-bottom: 6px; }
-    .modal-footer {
-      padding: 12px 20px 0;
-      flex-shrink: 0;
-    }
-    .modal-agree {
-      display: flex; align-items: center; gap: 10px;
-      font-size: 0.83rem; font-weight: 500; color: var(--navy);
-      padding: 12px 14px;
-      background: rgba(15,37,66,0.04);
-      border-radius: 12px;
-      margin-bottom: 12px;
-      cursor: pointer;
-    }
-    .modal-agree input { width: 18px; height: 18px; accent-color: var(--navy); flex-shrink: 0; }
-    .btn-accept {
-      width: 100%;
-      background: var(--navy); color: #fff;
-      border: none; border-radius: 14px;
-      padding: 14px; font-family: 'DM Sans', sans-serif;
-      font-size: 0.93rem; font-weight: 600; cursor: pointer;
-      display: flex; align-items: center; justify-content: center; gap: 8px;
-      transition: background 0.2s;
-    }
-    .btn-accept svg { width: 16px; height: 16px; fill: var(--gold); }
-    .btn-accept:hover { background: #162f54; }
-
-    footer {
-      text-align: center;
-      padding: 16px;
-      font-size: 0.7rem;
-      color: var(--muted);
-    }
-  </style>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; font-size: 11pt; color: #1c1c1e; }
+  .header { background: #0f2542; color: white; padding: 20px 24px 16px; text-align: center; }
+  .header h1 { font-size: 16pt; font-weight: bold; margin-bottom: 4px; }
+  .header p  { font-size: 9pt; color: #b8963e; margin-bottom: 2px; }
+  .header .ts { font-size: 8pt; color: #bbb; }
+  .gold-bar { background: #b8963e; height: 4px; }
+  .content { padding: 24px; }
+  .section-title {
+    background: #f0ede6; color: #0f2542; font-weight: bold;
+    font-size: 9pt; padding: 5px 10px; margin: 18px 0 10px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  tr { border-bottom: 1px solid #ddd; }
+  td { padding: 7px 8px; font-size: 10pt; vertical-align: top; }
+  td.label { color: #555; font-weight: bold; width: 38%; }
+  td.value { color: #111; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 48px; }
+  .sig-box { text-align: center; width: 44%; }
+  .sig-line { border-top: 1.5px solid #0f2542; padding-top: 6px; font-size: 9pt; color: #555; }
+  .footer {
+    background: #0f2542; color: #aaa; text-align: center;
+    font-size: 7.5pt; padding: 8px; position: fixed; bottom: 0; width: 100%;
+  }
+</style>
 </head>
 <body>
-
-<!-- OVERLAY -->
-<div class="overlay" id="overlay">
-  <div class="spinner-box">
-    <div class="spinner"></div>
-    <p>Menyimpan data…</p>
+<div class="header">
+  <h1>FORMULIR DATA PENGHUNI KOST</h1>
+  <p>Dokumen Resmi Pendaftaran Penghuni</p>
+  <div class="ts">Dicetak: ${tgl}</div>
+</div>
+<div class="gold-bar"></div>
+<div class="content">
+  <div class="section-title">Data Diri Penghuni</div>
+  <table>
+    <tr><td class="label">Nama Lengkap</td><td class="value">${data.nama || '—'}</td></tr>
+    <tr><td class="label">Nomor KTP (NIK)</td><td class="value">${data.ktp || '—'}</td></tr>
+    <tr><td class="label">Nomor Telepon</td><td class="value">${data.telepon || '—'}</td></tr>
+    <tr><td class="label">Tempat Lahir</td><td class="value">${data.tempat_lahir || '—'}</td></tr>
+    <tr><td class="label">Tanggal Lahir</td><td class="value">${tglLahir}</td></tr>
+  </table>
+  <div class="section-title">Kontak Darurat</div>
+  <table>
+    <tr><td class="label">Nama</td><td class="value">${data.cp_nama || '—'}</td></tr>
+    <tr><td class="label">Hubungan</td><td class="value">${data.cp_hubungan || '—'}</td></tr>
+    <tr><td class="label">No. HP</td><td class="value">${data.cp_hp || '—'}</td></tr>
+  </table>
+  <div class="section-title">Persetujuan</div>
+  <table>
+    <tr><td class="label">Setuju S&K</td><td class="value">${data.setuju || '—'}</td></tr>
+  </table>
+  <div class="sig-row">
+    <div class="sig-box"><div class="sig-line">Tanda Tangan Penghuni</div></div>
+    <div class="sig-box"><div class="sig-line">Tanda Tangan Pengelola</div></div>
   </div>
 </div>
-
-<!-- TOAST -->
-<div class="toast" id="toast">
-  <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-  <span id="toast-msg"></span>
+<div class="footer">
+  Dokumen ini dicetak secara otomatis dan bersifat rahasia. © ${new Date().getFullYear()}
 </div>
-
-<!-- MODAL TERMS (bottom sheet) -->
-<div class="modal" id="termsModal">
-  <div class="modal-box">
-    <div class="modal-handle"></div>
-    <div class="modal-header">
-      <div class="icon">
-        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM6 20V4h5v7h7v9H6z"/></svg>
-      </div>
-      <div>
-        <h3>Syarat & Ketentuan Sewa</h3>
-        <p>Baca dan setujui sebelum melanjutkan</p>
-      </div>
-    </div>
-    <div class="modal-content">
-      <ol>
-        <li>Pelunasan pembayaran sewa adalah dimuka paling lambat 3 hari setelah jatuh tempo</li>
-        <li>Periode sewa adalah bulanan dan diperpanjang secara otomatis</li>
-        <li>Bersedia mematuhi segala tata tertib bagi penghuni kos</li>
-        <li>Penggunaan kamar kos harus sesuai fungsi dan peruntukannya</li>
-        <li>Bersedia menjaga dan memelihara seluruh barang inventaris kos. Jika terjadi kerusakan/kehilangan karena kelalaian maka wajib mengganti</li>
-        <li>Pemilik kos tidak bertanggung jawab atas kehilangan barang pribadi</li>
-        <li>Pembatalan/pengakhiran harus diberitahukan minimal 1 minggu sebelumnya</li>
-        <li>Bersedia melapor ke ketua RT dan menyerahkan copy identitas</li>
-      </ol>
-    </div>
-    <div class="modal-footer">
-      <label class="modal-agree">
-        <input type="checkbox" id="agreeModal"/>
-        Saya menyetujui seluruh persyaratan di atas
-      </label>
-      <button class="btn-accept" onclick="acceptTerms()">
-        <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-        Setuju & Lanjutkan
-      </button>
-    </div>
-  </div>
-</div>
-
-<!-- APP BAR -->
-<header class="app-bar">
-  <div class="app-bar-icon">
-    <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
-  </div>
-  <div class="app-bar-titles">
-    <div class="title">Formulir Penghuni Kost</div>
-    <div class="subtitle">Pendaftaran Resmi</div>
-  </div>
-  <div class="app-bar-badge">RESMI</div>
-</header>
-
-<!-- PAGE CONTENT -->
-<div class="page-content">
-  <div class="form-fields" id="form-fields">
-
-    <!-- DATA DIRI -->
-    <div class="section-label">Data Diri</div>
-
-    <div class="card">
-      <!-- NAMA -->
-      <div class="field" id="f-nama">
-        <label>
-          <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg></span>
-          Nama Lengkap <span class="req">*</span>
-        </label>
-        <input type="text" id="nama" placeholder="Sesuai KTP"/>
-        <div class="err-msg">Nama lengkap wajib diisi</div>
-      </div>
-
-      <!-- NO KTP -->
-      <div class="field" id="f-ktp">
-        <label>
-          <span class="ico"><svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-9 3h2v2h-2V7zm0 4h2v6h-2v-6zM8 7h2v2H8V7zm0 4h2v6H8v-6z"/></svg></span>
-          Nomor KTP (NIK) <span class="req">*</span>
-        </label>
-        <input type="text" id="ktp" placeholder="16 digit angka" maxlength="16" inputmode="numeric"/>
-        <div class="err-msg">NIK harus 16 digit angka</div>
-      </div>
-
-      <!-- NO TELEPON -->
-      <div class="field" id="f-telp">
-        <label>
-          <span class="ico"><svg viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02z"/></svg></span>
-          Nomor Telepon <span class="req">*</span>
-        </label>
-        <input type="tel" id="telp" placeholder="08xxxxxxxxxx" inputmode="tel"/>
-        <div class="err-msg">Nomor telepon wajib diisi</div>
-      </div>
-
-      <!-- TEMPAT & TGL LAHIR -->
-      <div class="field" id="f-ttl">
-        <label>
-          <span class="ico"><svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/></svg></span>
-          Tempat &amp; Tanggal Lahir <span class="req">*</span>
-        </label>
-        <input type="text" id="ttl-tempat" placeholder="Tempat lahir (contoh: Jakarta)"/>
-        <input type="date" id="ttl-tgl" placeholder="Masukan Tgl Lahir Anda"/>
-        <div class="err-msg">Tempat dan tanggal lahir wajib diisi</div>
-      </div>
-    </div>
-
-    <!-- KONTAK DARURAT -->
-    <div class="section-label">Kontak Darurat</div>
-
-    <div class="card">
-      <div class="field" id="f-cp">
-        <label>
-          <span class="ico"><svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg></span>
-          Contact Person <span class="req">*</span>
-        </label>
-        <div class="cp-grid">
-          <input type="text" id="cp-nama" placeholder="Nama kontak darurat"/>
-          <select id="cp-hub">
-                  <option value="" disabled selected>-- Pilih hubungan --</option>
-                  <option value="Orang Tua (Ayah / Ibu)">Orang Tua (Ayah / Ibu)</option>
-                  <option value="Pasangan (Suami / Istri)">Pasangan (Suami / Istri)</option>
-                  <option value="Saudara Kandung (Kakak / Adik)">Saudara Kandung (Kakak / Adik)</option>
-                  <option value="Keluarga Lain (Paman / Bibi / Sepupu)">Keluarga Lain (Paman / Bibi / Sepupu)</option>
-                  <option value="Teman Dekat">Teman Dekat</option>
-            </select>
-        </div>
-        <input type="tel" id="cp-hp" placeholder="No. HP kontak darurat" inputmode="tel"/>
-        <div class="err-msg">Nama, hubungan, dan nomor HP darurat wajib diisi</div>
-      </div>
-    </div>
-
-    <!-- AUTO INFO -->
-    <div class="auto-info">
-      <p>Nama: <strong id="auto-nama">-</strong></p>
-      <p>Tanggal: <strong id="auto-tanggal">-</strong></p>
-    </div>
-
-    <!-- TERMS BOX -->
-    <div class="terms-box" id="terms-box-el">
-      <h3>Pernyataan &amp; Persyaratan Sewa</h3>
-      <ol>
-        <li>Pelunasan pembayaran sewa adalah dimuka paling lambat 3 hari setelah jatuh tempo</li>
-        <li>Periode sewa adalah bulanan dan diperpanjang secara otomatis</li>
-        <li>Bersedia mematuhi segala tata tertib bagi penghuni kos</li>
-        <li>Penggunaan kamar kos harus sesuai fungsi dan peruntukannya</li>
-        <li>Bersedia menjaga dan memelihara seluruh barang inventaris kos. Jika terjadi kerusakan/kehilangan karena kelalaian maka wajib mengganti</li>
-        <li>Pemilik kos tidak bertanggung jawab atas kehilangan barang pribadi</li>
-        <li>Pembatalan/pengakhiran harus diberitahukan minimal 1 minggu sebelumnya</li>
-        <li>Bersedia melapor ke ketua RT dan menyerahkan copy identitas</li>
-      </ol>
-      <p class="terms-footer">Demikian pernyataan ini dibuat dan disetujui oleh penghuni kost.</p>
-      <label class="agree">
-        <input type="checkbox" id="agree"/>
-        Saya menyetujui seluruh persyaratan di atas
-      </label>
-    </div>
-
-    <button class="btn-submit" onclick="submitForm()">
-      <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-      Kirim &amp; Simpan Data
-    </button>
-
-  </div>
-
-  <!-- SUCCESS -->
-  <div class="success-view" id="success-view">
-    <div class="check-circle">
-      <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
-    </div>
-    <h2>Data Terkirim!</h2>
-    <p>Terima kasih, <strong id="s-nama"></strong>.<br>Data Anda telah tersimpan dan akan segera ditinjau oleh pengelola kost.</p>
-    <div class="action-row">
-      <button class="btn-action btn-pdf" onclick="downloadPDF()">
-        <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-        Unduh Bukti PDF
-      </button>
-      <button class="btn-action btn-wa" onclick="shareWA()">
-        <svg viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12.05 2C6.478 2 2 6.478 2 12.05c0 1.87.513 3.62 1.407 5.122L2 22l4.962-1.382A10.011 10.011 0 0012.05 22C17.622 22 22 17.522 22 12.05 22 6.478 17.622 2 12.05 2z"/></svg>
-        Kirim PDF ke WhatsApp Owner
-      </button>
-      <button class="btn-action btn-reset" onclick="resetForm()">
-        <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
-        Isi Formulir Baru
-      </button>
-    </div>
-  </div>
-
-</div>
-
-<footer>&copy; <span id="yr"></span> Formulir Data Penghuni Kost &mdash; Dokumen bersifat rahasia</footer>
-<!--Konfigurasi -->
-<script>
-  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyQoZgI46H03WVS4I8C31LlJEEfRcpIpR0rG1CfgARzts70Zd0Z_Vj8y9jqu9MotuV3/exec";
-  const WA_NUMBER  = "628129085763";
-  const SECRET     = "kostpakagus"; // ← sama persis dengan di GAS
-
-  document.getElementById('yr').textContent = new Date().getFullYear();
-
-  const g = id => document.getElementById(id);
-  const v = id => (g(id)?.value ?? '').trim();
-
-  function fmtDate(str) {
-    if (!str) return '—';
-    return new Date(str).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
-  }
-
-  function setErr(fid, show) {
-    g('f-' + fid)?.classList.toggle('has-err', show);
-  }
-  function markInput(id, err) {
-    g(id)?.classList.toggle('err', err);
-  }
-
-  function validate() {
-    let ok = true;
-
-    const nama = v('nama');
-    setErr('nama', !nama); markInput('nama', !nama);
-    if (!nama) ok = false;
-
-    const ktp = v('ktp');
-    const ktpBad = !/^\d{16}$/.test(ktp);
-    setErr('ktp', ktpBad); markInput('ktp', ktpBad);
-    if (ktpBad) ok = false;
-
-    const telp = v('telp');
-    setErr('telp', !telp); markInput('telp', !telp);
-    if (!telp) ok = false;
-
-    const ttlT = v('ttl-tempat'), ttlD = v('ttl-tgl');
-    const ttlBad = !ttlT || !ttlD;
-    setErr('ttl', ttlBad);
-    markInput('ttl-tempat', !ttlT);
-    markInput('ttl-tgl', !ttlD);
-    if (ttlBad) ok = false;
-
-    const cpN = v('cp-nama'), cpH = v('cp-hub'), cpP = v('cp-hp');
-    const cpBad = !cpN || !cpH || !cpP;
-    setErr('cp', cpBad);
-    markInput('cp-nama', !cpN); markInput('cp-hub', !cpH); markInput('cp-hp', !cpP);
-    if (cpBad) ok = false;
-
-    const agree = document.getElementById('agree').checked;
-    const termsBox = document.getElementById('terms-box-el');
-    if (!agree) {
-      termsBox.classList.remove('err');
-      void termsBox.offsetWidth;
-      termsBox.classList.add('err');
-      ok = false;
-    } else {
-      termsBox.classList.remove('err');
-    }
-
-    return ok;
-  }
-
-  function getData() {
-    return {
-      timestamp:    new Date().toLocaleString('id-ID'),
-      nama:         v('nama'),
-      ktp:          v('ktp'),
-      telepon:      v('telp'),
-      tempat_lahir: v('ttl-tempat'),
-      tgl_lahir:    v('ttl-tgl'),
-      cp_nama:      v('cp-nama'),
-      cp_hubungan:  v('cp-hub'),
-      cp_hp:        v('cp-hp'),
-      setuju: document.getElementById('agree').checked ? 'YA' : 'TIDAK'
-    };
-  }
-
-  // Menyimpan driveLink setelah submit berhasil
-  let _driveLink = '';
-
-  // ── Generate PDF dan kembalikan sebagai base64 string ──
-  function buildPdfBase64() {
-    const { jsPDF } = window.jspdf;
-    const doc  = new jsPDF();
-    const data = getData();
-    const navy = [15,37,66], gold = [184,150,62], gray = [90,90,90];
-
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 38, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, 38, 210, 2.5, 'F');
-    doc.setTextColor(255,255,255);
-    doc.setFont('helvetica','bold'); doc.setFontSize(16);
-    doc.text('FORMULIR DATA PENGHUNI KOST', 105, 16, { align: 'center' });
-    doc.setFont('helvetica','normal'); doc.setFontSize(9);
-    doc.setTextColor(184,150,62);
-    doc.text('Dokumen Resmi Pendaftaran Penghuni', 105, 25, { align: 'center' });
-    doc.setTextColor(180,180,180);
-    doc.text('Dicetak: ' + data.timestamp, 105, 33, { align: 'center' });
-
-    let y = 55;
-    function secTitle(t) {
-      doc.setFillColor(240,237,230); doc.rect(10, y-5, 190, 9, 'F');
-      doc.setTextColor(...navy); doc.setFont('helvetica','bold'); doc.setFontSize(8.5);
-      doc.text(t, 14, y + 0.5); y += 12;
-    }
-    function row(label, val) {
-      doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(...gray);
-      doc.text(label, 14, y);
-      doc.setFont('helvetica','normal'); doc.setTextColor(20,20,20);
-      const lines = doc.splitTextToSize(val || '—', 115);
-      doc.text(lines, 80, y);
-      doc.setDrawColor(220,215,205); doc.line(14, y+3.5, 196, y+3.5);
-      y += 7 * lines.length + 1;
-    }
-
-    secTitle('DATA DIRI PENGHUNI');
-    row('Nama Lengkap',    data.nama);
-    row('Nomor KTP (NIK)', data.ktp);
-    row('Nomor Telepon',   data.telepon);
-    row('Tempat Lahir',    data.tempat_lahir);
-    row('Tanggal Lahir',   fmtDate(data.tgl_lahir));
-    y += 8;
-    secTitle('KONTAK DARURAT');
-    row('Nama',      data.cp_nama);
-    row('Hubungan',  data.cp_hubungan);
-    row('No. HP',    data.cp_hp);
-
-    y += 16;
-    doc.setDrawColor(...navy); doc.setLineWidth(0.5);
-    doc.line(14, y, 90, y);
-    doc.setFontSize(8); doc.setTextColor(...gray); doc.setFont('helvetica','normal');
-    doc.text('Tanda Tangan Penghuni', 14, y+6);
-    doc.line(120, y, 196, y);
-    doc.text('Tanda Tangan Pengelola', 120, y+6);
-
-    doc.setFillColor(...navy); doc.rect(0, 285, 210, 12, 'F');
-    doc.setFontSize(7); doc.setTextColor(160,160,160);
-    doc.text('Dokumen ini dicetak secara otomatis dan bersifat rahasia. © ' + new Date().getFullYear(), 105, 292, { align: 'center' });
-
-    // Kembalikan base64 (tanpa prefix data-URL)
-    return doc.output('datauristring'); // format: "data:application/pdf;base64,..."
-  }
-
-  // ── Download PDF ke perangkat user (tombol "Unduh Bukti PDF") ──
-  function downloadPDF() {
-    const { jsPDF } = window.jspdf;
-    const doc  = new jsPDF();
-    const data = getData();
-    const navy = [15,37,66], gold = [184,150,62], gray = [90,90,90];
-
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 38, 'F');
-    doc.setFillColor(...gold);
-    doc.rect(0, 38, 210, 2.5, 'F');
-    doc.setTextColor(255,255,255);
-    doc.setFont('helvetica','bold'); doc.setFontSize(16);
-    doc.text('FORMULIR DATA PENGHUNI KOST', 105, 16, { align: 'center' });
-    doc.setFont('helvetica','normal'); doc.setFontSize(9);
-    doc.setTextColor(184,150,62);
-    doc.text('Dokumen Resmi Pendaftaran Penghuni', 105, 25, { align: 'center' });
-    doc.setTextColor(180,180,180);
-    doc.text('Dicetak: ' + data.timestamp, 105, 33, { align: 'center' });
-
-    let y = 55;
-    function secTitle(t) {
-      doc.setFillColor(240,237,230); doc.rect(10, y-5, 190, 9, 'F');
-      doc.setTextColor(...navy); doc.setFont('helvetica','bold'); doc.setFontSize(8.5);
-      doc.text(t, 14, y + 0.5); y += 12;
-    }
-    function row(label, val) {
-      doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(...gray);
-      doc.text(label, 14, y);
-      doc.setFont('helvetica','normal'); doc.setTextColor(20,20,20);
-      const lines = doc.splitTextToSize(val || '—', 115);
-      doc.text(lines, 80, y);
-      doc.setDrawColor(220,215,205); doc.line(14, y+3.5, 196, y+3.5);
-      y += 7 * lines.length + 1;
-    }
-
-    secTitle('DATA DIRI PENGHUNI');
-    row('Nama Lengkap',    data.nama);
-    row('Nomor KTP (NIK)', data.ktp);
-    row('Nomor Telepon',   data.telepon);
-    row('Tempat Lahir',    data.tempat_lahir);
-    row('Tanggal Lahir',   fmtDate(data.tgl_lahir));
-    y += 8;
-    secTitle('KONTAK DARURAT');
-    row('Nama',      data.cp_nama);
-    row('Hubungan',  data.cp_hubungan);
-    row('No. HP',    data.cp_hp);
-
-    y += 16;
-    doc.setDrawColor(...navy); doc.setLineWidth(0.5);
-    doc.line(14, y, 90, y);
-    doc.setFontSize(8); doc.setTextColor(...gray); doc.setFont('helvetica','normal');
-    doc.text('Tanda Tangan Penghuni', 14, y+6);
-    doc.line(120, y, 196, y);
-    doc.text('Tanda Tangan Pengelola', 120, y+6);
-
-    doc.setFillColor(...navy); doc.rect(0, 285, 210, 12, 'F');
-    doc.setFontSize(7); doc.setTextColor(160,160,160);
-    doc.text('Dokumen ini dicetak secara otomatis dan bersifat rahasia. © ' + new Date().getFullYear(), 105, 292, { align: 'center' });
-
-    doc.save('Data_Penghuni_' + (data.nama.replace(/\s+/g,'_') || 'Kost') + '.pdf');
-  }
-
-  // Simpan data & driveLink setelah submit
-  let _lastData  = null;
-
-  // ── Submit form — kirim data ke GAS (no-cors), GAS generate PDF di server ──
-  async function submitForm() {
-    if (!validate()) {
-      const agree = document.getElementById('agree').checked;
-      if (!agree) {
-        toast('⚠️ Harap centang persetujuan syarat & ketentuan!');
-        document.getElementById('terms-box-el').scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } else {
-        toast('Mohon lengkapi semua data yang wajib diisi');
-      }
-      return;
-    }
-
-    g('overlay').classList.add('show');
-    g('overlay').querySelector('p').textContent = 'Menyimpan data…';
-
-    const data     = getData();
-    const formData = new URLSearchParams();
-    Object.keys(data).forEach(key => formData.append(key, data[key]));
-    formData.append('token', SECRET); // ← tambahkan ini
-
-    try {
-      // no-cors: GAS terima data, generate PDF, simpan ke Drive & Sheets
-      await fetch(SCRIPT_URL, { method: 'POST', body: formData, mode: 'no-cors' });
-
-      g('overlay').classList.remove('show');
-      _lastData = data;
-      showSuccess(data);
-      toast('Data berhasil dikirim ✓ PDF sedang diproses…');
-
-      // Ambil link Drive setelah GAS selesai generate PDF (~5 detik)
-      fetchDriveLink(data.ktp);
-
-    } catch (err) {
-      g('overlay').classList.remove('show');
-      toast('Gagal mengirim data! Cek koneksi internet.');
-      console.error(err);
-    }
-  }
-
-  // ── Ambil link Drive dari GAS via GET request ──
-  async function fetchDriveLink(ktp) {
-    await new Promise(r => setTimeout(r, 6000)); // tunggu GAS selesai
-    try {
-      const url = SCRIPT_URL + '?action=getlink&ktp=' + encodeURIComponent(ktp) + '&token=' + SECRET;
-      const res  = await fetch(url);
-      const json = await res.json();
-      if (json.driveLink) {
-        _driveLink = json.driveLink;
-        toast('✅ PDF sudah siap! Tekan tombol WhatsApp untuk kirim ke owner.');
-      }
-    } catch(e) {
-      console.warn('Gagal fetch drive link:', e);
-    }
-  }
-
-  function showSuccess(data) {
-    g('s-nama').textContent = data.nama;
-    g('form-fields').classList.add('hide');
-    g('success-view').classList.add('show');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  // ── Tombol "Kirim PDF ke WhatsApp Owner" ──
-  function shareWA() {
-    const data = _lastData || getData();
-    const tgl  = new Date().toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
-
-    const linkBaris = _driveLink
-      ? '📎 *File PDF:* ' + _driveLink + '\n'
-      : '📎 _PDF masih diproses, coba beberapa saat lagi_\n';
-
-    const msg = encodeURIComponent(
-      '🏠 *DATA PENGHUNI BARU*\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '👤 *Nama:* ' + data.nama + '\n' +
-      '🪪 *NIK:* ' + data.ktp + '\n' +
-      '📞 *Telepon:* ' + data.telepon + '\n' +
-      '📅 *TTL:* ' + data.tempat_lahir + ', ' + fmtDate(data.tgl_lahir) + '\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '🆘 *Kontak Darurat:*\n' +
-      '   ' + data.cp_nama + ' (' + data.cp_hubungan + ')\n' +
-      '   📞 ' + data.cp_hp + '\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      '📆 _Dikirim: ' + tgl + '_\n' +
-      '━━━━━━━━━━━━━━━\n' +
-      linkBaris +
-      '_Data lengkap tersimpan di Google Sheets._'
-    );
-
-    window.open('https://wa.me/' + WA_NUMBER + '?text=' + msg, '_blank');
-    toast(_driveLink ? '✅ WhatsApp terbuka dengan link PDF!' : '⚠️ WhatsApp terbuka — PDF masih diproses, tunggu notif lalu kirim ulang.');
-  }
-
-  function resetForm() {
-    document.querySelectorAll('input').forEach(el => el.value = '');
-    document.querySelectorAll('select').forEach(el => el.selectedIndex = 0);
-    document.querySelectorAll('.has-err').forEach(el => el.classList.remove('has-err'));
-    document.querySelectorAll('.err').forEach(el => el.classList.remove('err'));
-    g('form-fields').classList.remove('hide');
-    g('success-view').classList.remove('show');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    document.getElementById('agree').checked = false;
-  }
-
-  function toast(msg) {
-    const t = g('toast');
-    g('toast-msg').textContent = msg;
-    t.classList.add('show');
-    setTimeout(() => t.classList.remove('show'), 3200);
-  }
-
-  function updateAutoInfo() {
-    const nama = v('nama') || '-';
-    const now = new Date();
-    const tanggal = now.toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
-    document.getElementById('auto-nama').textContent = nama;
-    document.getElementById('auto-tanggal').textContent = tanggal;
-  }
-
-  document.getElementById('nama').addEventListener('input', updateAutoInfo);
-  window.addEventListener('load', updateAutoInfo);
-
-  window.addEventListener('load', () => {
-    document.getElementById('termsModal').classList.add('show');
-  });
-
-  function acceptTerms() {
-    const agree = document.getElementById('agreeModal').checked;
-    if (!agree) {
-      toast('Centang persetujuan dulu!');
-      return;
-    }
-    document.getElementById('termsModal').classList.remove('show');
-    document.getElementById('agree').checked = true;
-  }
-</script>
-
 </body>
-</html>
+</html>`;
+
+  const htmlBlob = Utilities.newBlob(html, 'text/html', 'form.html');
+  const pdfBlob  = htmlBlob.getAs('application/pdf');
+
+  const safeName = (data.nama || 'Penghuni').replace(/[^a-zA-Z0-9]/g, '_');
+  pdfBlob.setName('FormPenghuni_' + safeName + '_' + tglFile + '.pdf');
+
+  const folder = getOrCreateFolder(DRIVE_FOLDER_NAME);
+  const file   = folder.createFile(pdfBlob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  return file.getUrl(); // ← INI KUNCI UTAMANYA
+}
+
+// ============================================================
+// getOrCreateFolder
+// ============================================================
+function getOrCreateFolder(folderName) {
+  const it = DriveApp.getFoldersByName(folderName);
+  if (it.hasNext()) return it.next();
+  return DriveApp.createFolder(folderName);
+}
+
+// ============================================================
+// doGet
+// ============================================================
+function doGet(e) {
+  if (e && e.parameter && Object.keys(e.parameter).length > 0
+      && e.parameter.token !== SECRET) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ error: "Unauthorized" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (e && e.parameter && e.parameter.action === 'getlink') {
+    try {
+      const ktp   = e.parameter.ktp || '';
+      const sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getActiveSheet();
+      const data  = sheet.getDataRange().getValues();
+
+      let driveLink = '';
+      for (let i = data.length - 1; i >= 1; i--) {
+        if (String(data[i][2]) === ktp) {
+          driveLink = data[i][10] || '';
+          break;
+        }
+      }
+
+      return ContentService
+        .createTextOutput(JSON.stringify({ driveLink: driveLink }))
+        .setMimeType(ContentService.MimeType.JSON);
+
+    } catch(err) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ driveLink: '', error: err.message }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
+  return HtmlService
+    .createHtmlOutputFromFile('index')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// ============================================================
+// Test function
+// ============================================================
+function testPdfSaja() {
+  const dataDummy = {
+    nama:         "Test User",
+    ktp:          "1234567890123456",
+    telepon:      "081234567890",
+    tempat_lahir: "Jakarta",
+    tgl_lahir:    "1990-01-15",
+    cp_nama:      "Ayah Test",
+    cp_hubungan:  "Orang Tua (Ayah / Ibu)",
+    cp_hp:        "081111111111",
+    setuju:       "YA"
+  };
+
+  try {
+    const link = generateAndSavePdf(dataDummy);
+    Logger.log("✅ Berhasil! Link: " + link);
+  } catch(err) {
+    Logger.log("❌ Error: " + err.message);
+    Logger.log("Stack: " + err.stack);
+  }
+}
